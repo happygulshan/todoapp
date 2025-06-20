@@ -11,7 +11,11 @@ import (
 
 func main() {
 
-	database := db.InitDB()
+	database, err := db.InitDB()
+	if err != nil {
+		log.Fatalf("DB init failed: %v", err)
+	}
+
 	defer database.Close()
 
 	db.RunMigrations(database)
@@ -19,19 +23,15 @@ func main() {
 	h := handlers.Handler{DB: database}
 	r := mux.NewRouter()
 
-	// authMiddleware := middleware.AuthMiddleware(database)
-
 	r.HandleFunc("/signup", h.CreateUser).Methods("POST")
 	r.HandleFunc("/login", h.Login).Methods("POST")
 	r.HandleFunc("/logout", h.Logout).Methods("POST")
-	r.HandleFunc("/task", h.CreateTask).Methods("POST")
 
-
-	// Protect routes, will implement below later
-	// r.Handle("/task", authMiddleware(http.HandlerFunc(h.CreateTask))).Methods("POST")
-
-	// r.HandleFunc("/task", h.Getalltasks).Method("GET")
-	// r.HandleFunc("/task/{id}", h.Getalltasks).Method("GET")
+	// task related job here
+	r.HandleFunc("/createtask", h.CreateTask).Methods("POST")
+	r.HandleFunc("/getalltask", h.GetAllTasks).Methods("GET")
+	r.HandleFunc("/updatetask/{id}", h.UpdateTask).Methods("PATCH")
+	r.HandleFunc("/deletetask/{id}", h.DeleteTask).Methods("DELETE")
 
 	log.Println("Server starting on :8080")
 

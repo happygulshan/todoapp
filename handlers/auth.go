@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 	"todoapp/models"
 
 	"github.com/google/uuid"
@@ -24,33 +25,33 @@ func isValidEmail(email string) bool {
 func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	var user models.User
 	if err := json.NewDecoder(r.Body).Decode(&user); err != nil {
-		http.Error(w, "Invalid input", http.StatusBadRequest)
+		http.Error(w, "invalid input", http.StatusBadRequest)
 		return
 	}
 
 	//basic simple validation
 	if user.Name == "" {
-		http.Error(w, "Name is required", http.StatusBadRequest)
+		http.Error(w, "name is required", http.StatusBadRequest)
 		return
 	}
 	if user.Email == "" {
-		http.Error(w, "Email is required", http.StatusBadRequest)
+		http.Error(w, "email is required", http.StatusBadRequest)
 		return
 	}
 	if user.Password == "" {
-		http.Error(w, "Password is required", http.StatusBadRequest)
+		http.Error(w, "password is required", http.StatusBadRequest)
 		return
 	}
 
 	// Validate email format (simple regex)
 	if !isValidEmail(user.Email) {
-		http.Error(w, "Invalid email format", http.StatusBadRequest)
+		http.Error(w, "invalid email format", http.StatusBadRequest)
 		return
 	}
 
 	// Validate password strength
 	if len(user.Password) < 8 {
-		http.Error(w, "Password must be at least 8 characters", http.StatusBadRequest)
+		http.Error(w, "password must be at least 8 characters", http.StatusBadRequest)
 		return
 	}
 
@@ -59,10 +60,10 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	err := h.DB.QueryRow("SELECT id FROM users WHERE email = TRIM($1)", user.Email).Scan(&existingID)
 
 	if err == nil {
-		http.Error(w, "Email already exists", http.StatusConflict)
+		http.Error(w, "email already exists", http.StatusConflict)
 		return
 	} else if err != sql.ErrNoRows {
-		http.Error(w, "Database error", http.StatusInternalServerError)
+		http.Error(w, "database error", http.StatusInternalServerError)
 		return
 	}
 	// end of validation
@@ -70,7 +71,7 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	// Hash the password before saving
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
 	if err != nil {
-		http.Error(w, "Failed to hash password", http.StatusInternalServerError)
+		http.Error(w, "failed to hash password", http.StatusInternalServerError)
 		return
 	}
 	user.Password = string(hashedPassword)
@@ -81,7 +82,7 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		fmt.Println(err.Error())
-		http.Error(w, "Faiiled to register user", http.StatusInternalServerError)
+		http.Error(w, "faiiled to register user", http.StatusInternalServerError)
 		return
 	}
 
@@ -97,7 +98,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request", http.StatusBadRequest)
+		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
 
@@ -109,13 +110,13 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		Scan(&user.ID, &user.Name, &user.Email, &hashedPassword)
 
 	if err != nil {
-		http.Error(w, "Invalid email or password", http.StatusUnauthorized)
+		http.Error(w, "invalid email or password", http.StatusUnauthorized)
 		return
 	}
 
 	// Compare the provided password with the hashed one
 	if err := bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(req.Password)); err != nil {
-		http.Error(w, "Invalid email or password", http.StatusUnauthorized)
+		http.Error(w, "invalid email or password", http.StatusUnauthorized)
 		return
 	}
 
@@ -125,17 +126,48 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	// Insert session into DB
 	_, err = h.DB.Exec("INSERT INTO sessions(user_id, token) VALUES($1, $2)", user.ID, token)
 	if err != nil {
-		http.Error(w, "Failed to create session", http.StatusInternalServerError)
+		http.Error(w, "failed to create session", http.StatusInternalServerError)
 		return
 	}
 
 	// Return token to client
 	json.NewEncoder(w).Encode(map[string]string{
 		"token": token,
+		"msg":   "Login Successful",
 	})
 }
 
 func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 	token := strings.TrimSpace(r.Header.Get("Authorization"))
-	fmt.Println(token)
+
+	var expires_at time.Time
+	// check if token already expired
+
+	err := h.DB.QueryRow("SELECT expires_at FROM sessions WHERE token = $1", token).
+		Scan(&expires_at)
+
+	if err != nil {
+		http.Error(w, "something wrong in veryfying token", http.StatusUnauthorized)
+		return
+	}
+
+	if expires_at.Before(time.Now()) {
+		http.Error(w, "session expired. Please log in again.", http.StatusUnauthorized)
+		return
+	}
+
+	var tok string
+	err = h.DB.QueryRow("UPDATE sessions SET expires_at = CURRENT_TIMESTAMP WHERE token=$1 RETURNING token", token).Scan(&tok)
+
+	if err != nil {
+		http.Error(w, "failed to logout", http.StatusInternalServerError)
+		return
+	}
+
+	// Return token and msg to client
+	json.NewEncoder(w).Encode(map[string]string{
+		"token": tok,
+		"msg":   "Successful logout",
+	})
+
 }

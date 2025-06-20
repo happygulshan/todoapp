@@ -2,9 +2,12 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 	"todoapp/models"
+
+	"github.com/gorilla/mux"
 
 	// "todoapp/models"
 
@@ -25,7 +28,7 @@ func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		Scan(&session.ID, &session.User_id, &session.Token, &session.CreatedAt, &session.Expires_at)
 
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusUnauthorized)
+		http.Error(w, "invalid token", http.StatusBadRequest)
 		return
 	}
 
@@ -37,7 +40,7 @@ func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
 	var task models.Task
 
 	if err := json.NewDecoder(r.Body).Decode(&task); err != nil {
-		http.Error(w, "Invalid request", http.StatusBadRequest)
+		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
 
@@ -50,9 +53,188 @@ func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		task.Title, task.Description, task.User_id, task.Status).Scan(&task.ID)
 
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "failed to create task", http.StatusInternalServerError)
 		return
 	}
 
 	json.NewEncoder(w).Encode(task)
+}
+
+func (h *Handler) UpdateTask(w http.ResponseWriter, r *http.Request) {
+
+	token := strings.TrimSpace(r.Header.Get("Authorization"))
+
+	var session models.Session
+
+	// var tok string
+	err := h.DB.QueryRow("SELECT user_id, expires_at FROM sessions WHERE token = $1", token).
+		Scan(&session.User_id, &session.Expires_at)
+
+	if err != nil {
+		http.Error(w, "invalid token", http.StatusBadRequest)
+		return
+	}
+
+	if session.Expires_at.Before(time.Now()) {
+		http.Error(w, "Session expired. Please log in again.", http.StatusUnauthorized)
+		return
+	}
+
+	vars := mux.Vars(r)
+	taskID := vars["id"]
+	var user_id string
+	err = h.DB.QueryRow("select user_id from tasks where id = $1", taskID).Scan(&user_id)
+
+	if err != nil {
+		http.Error(w, "invalid task id", http.StatusBadRequest)
+		return
+	}
+
+	if user_id != session.User_id {
+		http.Error(w, "you dont have access to update it", http.StatusForbidden)
+		return
+	}
+
+	var updateFields map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&updateFields); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	allowed := map[string]bool{"title": true, "description": true, "status": true}
+
+	for key := range updateFields {
+		if !allowed[key] {
+			http.Error(w, "invalid field: "+key, http.StatusBadRequest)
+			return
+		}
+	}
+
+	query := "UPDATE tasks SET "
+	params := []interface{}{}
+	i := 1
+
+	for key, value := range updateFields {
+		query += fmt.Sprintf("%s = $%d, ", key, i)
+		params = append(params, value)
+		i++
+	}
+
+	// Remove last comma
+	query = strings.TrimSuffix(query, ", ")
+	query += " WHERE id = $%d" // for task ID
+	query = fmt.Sprintf(query, i)
+
+	params = append(params, taskID)
+
+	var task models.Task
+	query += " RETURNING id, title, description, user_id, status"
+
+	err = h.DB.QueryRow(query, params...).Scan(&task.ID, &task.Title, &task.Description, &task.User_id, &task.Status)
+
+	if err != nil {
+		fmt.Println(err.Error())
+		http.Error(w, "failed to update task", http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(task)
+}
+
+func (h *Handler) GetAllTasks(w http.ResponseWriter, r *http.Request) {
+
+	token := strings.TrimSpace(r.Header.Get("Authorization"))
+
+	var session models.Session
+
+	// var tok string
+	err := h.DB.QueryRow("SELECT user_id, expires_at FROM sessions WHERE token = $1", token).
+		Scan(&session.User_id, &session.Expires_at)
+
+	if err != nil {
+		http.Error(w, "invalid token", http.StatusBadRequest)
+		return
+	}
+
+	if session.Expires_at.Before(time.Now()) {
+		http.Error(w, "Session expired. Please log in again.", http.StatusUnauthorized)
+		return
+	}
+
+	rows, err := h.DB.Query("SELECT id, title, description, user_id, status FROM tasks WHERE user_id = $1::uuid", session.User_id)
+	if err != nil {
+		fmt.Println(err.Error())
+		http.Error(w, "failed to fetch tasks", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var tasks []models.Task
+
+	for rows.Next() {
+		var task models.Task
+		if err := rows.Scan(&task.ID, &task.Title, &task.Description, &task.User_id, &task.Status); err != nil {
+			http.Error(w, "failed to scan task", http.StatusInternalServerError)
+			return
+		}
+		tasks = append(tasks, task)
+	}
+
+	// Handle case where no rows matched
+	if len(tasks) == 0 {
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{"message": "No tasks found"})
+		return
+	}
+
+	// Send back the tasks
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(tasks)
+
+}
+
+func (h *Handler) DeleteTask(w http.ResponseWriter, r *http.Request) {
+
+	token := strings.TrimSpace(r.Header.Get("Authorization"))
+
+	var session models.Session
+
+	// var tok string
+	err := h.DB.QueryRow("SELECT user_id, expires_at FROM sessions WHERE token = $1", token).
+		Scan(&session.User_id, &session.Expires_at)
+
+	if err != nil {
+		http.Error(w, "invalid token", http.StatusUnauthorized)
+		return
+	}
+
+	if session.Expires_at.Before(time.Now()) {
+		http.Error(w, "Session expired. Please log in again.", http.StatusUnauthorized)
+		return
+	}
+
+	vars := mux.Vars(r)
+	taskID := vars["id"]
+	var user_id string
+	err = h.DB.QueryRow("select user_id from tasks where id = $1", taskID).Scan(&user_id)
+
+	if err != nil {
+		http.Error(w, "invalid task id", http.StatusBadRequest)
+		return
+	}
+
+	if user_id != session.User_id {
+		http.Error(w, "you dont have access to delete it", http.StatusUnauthorized)
+		return
+	}
+
+	_, err = h.DB.Exec("DELETE FROM tasks WHERE id = $1", taskID)
+	if err != nil {
+		http.Error(w, "failed to delete task", http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]string{
+		"msg": "Successfully deleted task",
+	})
 }

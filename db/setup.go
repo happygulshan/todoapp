@@ -9,23 +9,17 @@ import (
 
 var DB *sql.DB
 
-func InitDB() *sql.DB {
-	var err error
+func InitDB() (*sql.DB, error) {
 	connStr := "postgres://postgres:gulshan@localhost:5432/todoappdb?sslmode=disable"
-	DB, err = sql.Open("postgres", connStr)
+	db, err := sql.Open("postgres", connStr)
 	if err != nil {
-		fmt.Println("error :)")
-		panic(err)
+		return nil, fmt.Errorf("failed to open DB: %w", err)
 	}
 
-	err = DB.Ping()
-	if err != nil {
-		fmt.Println("error :) 2")
-		panic(err)
+	if err = db.Ping(); err != nil {
+		return nil, fmt.Errorf("failed to ping DB: %w", err)
 	}
 
 	fmt.Println("Connected to DB!")
-
-	return DB
-
+	return db, nil
 }
