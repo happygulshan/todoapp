@@ -7,7 +7,9 @@ import (
 	_ "github.com/lib/pq"
 )
 
-var DB *sql.DB
+var (
+	DB *sql.DB
+)
 
 func InitDB() (*sql.DB, error) {
 	connStr := "postgres://postgres:gulshan@localhost:5432/todoappdb?sslmode=disable"
